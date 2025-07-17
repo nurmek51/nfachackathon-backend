@@ -54,13 +54,13 @@ db.sqlite3
 db.sqlite3-journal
 media/
 
-# Docker
-Dockerfile
+# Docker (but keep requirements.txt)
+Dockerfile*
 .dockerignore
 docker-compose*.yml
 
 # Documentation
-README.md
+README*.md
 docs/
 
 # Tests
@@ -76,4 +76,9 @@ yarn-error.log*
 
 # Temporary files
 *.tmp
-*.temp 
+*.temp
+
+# Environment files (but keep env.example)
+.env
+.env.local
+.env.production 
