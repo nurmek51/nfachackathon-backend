@@ -15,13 +15,18 @@ class AvatarGenerationService:
     """Service for generating avatars using Google Cloud Imagen 4"""
     
     def __init__(self):
-        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = settings.GOOGLE_APPLICATION_CREDENTIALS
+        # Use environment variables from settings
+        credentials_path = settings.GOOGLE_APPLICATION_CREDENTIALS
+        project_id = settings.GOOGLE_CLOUD_PROJECT_ID
+        bucket_name = settings.GOOGLE_CLOUD_BUCKET_NAME
+        
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credentials_path
         vertexai.init(
-            project=settings.GOOGLE_CLOUD_PROJECT_ID,
+            project=project_id,
             location='us-central1'
         )
-        self.storage_client = storage.Client(project=settings.GOOGLE_CLOUD_PROJECT_ID)
-        self.bucket = self.storage_client.bucket(settings.GOOGLE_CLOUD_BUCKET_NAME)
+        self.storage_client = storage.Client(project=project_id)
+        self.bucket = self.storage_client.bucket(bucket_name)
     
     def generate_avatar_prompt(self, headwear: str, accessory: str, gender: str, favorite_color: str) -> str:
         """Generate the prompt for avatar creation"""

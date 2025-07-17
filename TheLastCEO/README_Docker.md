@@ -1,53 +1,96 @@
 # Docker Setup for TheLastCEO Backend
 
-This document provides instructions for building and running the Django backend using Docker.
+This document provides instructions for building and running the Django backend using Docker with Supabase database.
 
 ## Prerequisites
 
 - Docker
 - Docker Compose
 - Google Cloud credentials file (`key.json`)
+- Supabase database (already deployed)
+
+## Environment Variables
+
+The application uses environment variables for configuration. Copy `env.example` to `.env` and configure your settings:
+
+```bash
+cp env.example .env
+```
+
+### Required Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `SECRET_KEY` | Django secret key | `your-django-secret-key-here` |
+| `DEBUG` | Django debug mode | `True` (dev) / `False` (prod) |
+| `ALLOWED_HOSTS` | Comma-separated list of allowed hosts | `localhost,127.0.0.1,*` |
+
+### Database Configuration (Supabase)
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DATABASE_URL` | Full Supabase database connection string | `postgresql://user:pass@host:port/db` |
+
+### Redis Configuration
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `REDIS_URL` | Redis connection string | `redis://localhost:6379/0` |
+| `REDIS_HOST` | Redis host | `127.0.0.1` |
+| `REDIS_PORT` | Redis port | `6379` |
+
+### Google Cloud Configuration
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `GOOGLE_CLOUD_PROJECT_ID` | Google Cloud project ID | `your-project-id` |
+| `GOOGLE_CLOUD_BUCKET_NAME` | Google Cloud Storage bucket | `your-bucket-name` |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to credentials file | `path/to/key.json` |
+
+### Application Settings
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AVATAR_GENERATION_ENABLED` | Enable avatar generation | `True` |
+| `AVATAR_CACHE_TIMEOUT` | Avatar cache timeout (seconds) | `3600` |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated CORS origins | `http://localhost:3000` |
+| `JWT_ACCESS_TOKEN_LIFETIME` | JWT access token lifetime (minutes) | `60` |
+| `JWT_REFRESH_TOKEN_LIFETIME` | JWT refresh token lifetime (minutes) | `1440` |
+| `TIME_ZONE` | Application timezone | `Asia/Almaty` |
 
 ## Quick Start
 
 ### Development Environment
 
-1. **Build and run the development environment:**
+1. **Copy environment file:**
+   ```bash
+   cp env.example .env
+   ```
+
+2. **Configure your .env file** with your specific values.
+
+3. **Build and run the development environment:**
    ```bash
    docker-compose up --build
    ```
 
-2. **Access the application:**
+4. **Access the application:**
    - Backend API: http://localhost:8000
    - Admin interface: http://localhost:8000/admin
-   - PostgreSQL: localhost:5432
+   - Nginx proxy: http://localhost
    - Redis: localhost:6379
 
-3. **Stop the services:**
+5. **Stop the services:**
    ```bash
    docker-compose down
    ```
 
 ### Production Environment
 
-1. **Create a `.env` file with your production settings:**
+1. **Copy and configure environment file:**
    ```bash
-   # Database
-   DATABASE_URL=postgresql://user:password@host:port/dbname
-   POSTGRES_DB=your_db_name
-   POSTGRES_USER=your_db_user
-   POSTGRES_PASSWORD=your_secure_password
-   
-   # Django
-   SECRET_KEY=your_django_secret_key
-   DEBUG=False
-   
-   # Google Cloud
-   GOOGLE_CLOUD_PROJECT_ID=your_project_id
-   GOOGLE_CLOUD_BUCKET_NAME=your_bucket_name
-   
-   # Redis
-   REDIS_URL=redis://redis:6379/0
+   cp env.example .env
+   # Edit .env with production values
    ```
 
 2. **Build and run the production environment:**
@@ -127,31 +170,42 @@ docker run -p 8000:8000 thelastceo-backend:prod
 - **Port:** 8000
 - **Environment:** Development/Production
 - **Features:** API endpoints, admin interface, WebSocket support
-
-### Database (PostgreSQL)
-- **Port:** 5432
-- **Data:** Persistent volume
-- **Features:** User data, game sessions, statistics
+- **Database:** Connected to Supabase PostgreSQL
 
 ### Redis
 - **Port:** 6379
 - **Data:** Persistent volume
 - **Features:** WebSocket channels, caching, Celery broker
 
-### Nginx (Production only)
+### Nginx
 - **Port:** 80, 443
 - **Features:** Reverse proxy, static file serving, rate limiting
 
-## Environment Variables
+### Celery Worker (Optional)
+- **Features:** Background task processing
+- **Dependencies:** Redis, Backend
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DEBUG` | Django debug mode | `True` (dev) / `False` (prod) |
-| `DATABASE_URL` | PostgreSQL connection string | - |
-| `REDIS_URL` | Redis connection string | `redis://redis:6379/0` |
-| `SECRET_KEY` | Django secret key | - |
-| `GOOGLE_CLOUD_PROJECT_ID` | Google Cloud project ID | - |
-| `GOOGLE_CLOUD_BUCKET_NAME` | Google Cloud Storage bucket | - |
+## Database Setup
+
+This setup uses Supabase as the database provider. The database is already deployed and configured.
+
+### Connection Details
+- **Host:** `db.hpovgribnyikmxgbxtww.supabase.co`
+- **Database:** `postgres`
+- **User:** `postgres`
+- **Port:** `5432`
+
+### Migration Commands
+```bash
+# Run migrations
+docker-compose exec backend python manage.py migrate
+
+# Create superuser
+docker-compose exec backend python manage.py createsuperuser
+
+# Load initial data
+docker-compose exec backend python manage.py loaddata initial_data
+```
 
 ## Troubleshooting
 
@@ -167,26 +221,35 @@ docker run -p 8000:8000 thelastceo-backend:prod
 
 2. **Database connection issues:**
    ```bash
-   # Check if database is running
-   docker-compose ps
+   # Check if Supabase is accessible
+   docker-compose exec backend python manage.py dbshell
    
-   # View database logs
-   docker-compose logs db
+   # View backend logs
+   docker-compose logs backend
    ```
 
-3. **Permission issues:**
+3. **Redis connection issues:**
+   ```bash
+   # Check if Redis is running
+   docker-compose ps
+   
+   # View Redis logs
+   docker-compose logs redis
+   ```
+
+4. **Permission issues:**
    ```bash
    # Fix file permissions
    sudo chown -R $USER:$USER .
    ```
 
-4. **Build cache issues:**
+5. **Environment variable issues:**
    ```bash
-   # Clear Docker build cache
-   docker builder prune
+   # Check if .env file exists
+   ls -la .env
    
-   # Rebuild without cache
-   docker-compose build --no-cache
+   # Verify environment variables are loaded
+   docker-compose exec backend env | grep -E "(DEBUG|DATABASE|REDIS)"
    ```
 
 ### Logs
@@ -197,8 +260,8 @@ docker-compose logs
 
 # View specific service logs
 docker-compose logs backend
-docker-compose logs db
 docker-compose logs redis
+docker-compose logs nginx
 
 # Follow logs in real-time
 docker-compose logs -f backend
@@ -207,10 +270,12 @@ docker-compose logs -f backend
 ## Security Notes
 
 1. **Never commit sensitive data** like `.env` files or `key.json`
-2. **Use strong passwords** for database and Django admin
+2. **Use strong passwords** for Django admin
 3. **Enable HTTPS** in production
 4. **Regularly update** base images and dependencies
 5. **Monitor logs** for suspicious activity
+6. **Use environment variables** for all sensitive configuration
+7. **Secure Supabase connection** with proper credentials
 
 ## Performance Optimization
 
@@ -218,4 +283,67 @@ docker-compose logs -f backend
 2. **Enable gzip compression** (already configured in nginx)
 3. **Use Redis caching** for frequently accessed data
 4. **Optimize database queries** and add indexes
-5. **Use CDN** for static files in production 
+5. **Use CDN** for static files in production
+
+---
+
+## Game Quiz (Kahoot-style) — Реализация и API
+
+### Как добавить вопросы для квиза
+
+Для добавления/обновления вопросов второго этапа (квиз):
+
+1. Отредактируйте management-команду `game/management/commands/create_quiz_questions.py` или добавьте свои вопросы в аналогичном формате.
+2. Выполните команду:
+   ```bash
+   docker-compose exec backend python manage.py create_quiz_questions
+   ```
+   Это удалит старые и добавит новые вопросы в базу.
+
+### Как работает квиз (реальное время, как Kahoot)
+- Вопрос отправляется всем игрокам через WebSocket (`quiz_question`).
+- Игроки отправляют ответы (через WebSocket, тип `quiz_answer`).
+- Ответы принимаются и сразу отображаются всем (тип `quiz_answer_received`).
+- После таймера показывается статистика по вопросу (тип `quiz_results`): сколько кто ответил, кто был прав.
+- После всех вопросов — подсчет очков (учитывается скорость и правильность), переход к следующему этапу.
+
+#### Пример правильных ответов:
+1. Бахаудин (B)
+2. АААхх (D)
+3. Talapacademy (B)
+4. Бахредин (A)
+5. Это городская легенда (C)
+6. Куока AI (A)
+
+### API для квиза
+- `GET /quiz/questions/` — получить 6 случайных вопросов (авторизация обязательна).
+  - Ответ:
+    ```json
+    {
+      "questions": [
+        {
+          "id": 1,
+          "question_text": "Как пишется полное имя Бахи:",
+          "options": {"A": "Баха", "B": "Бахаудин", "C": "Бахауддин", "D": "Бахардуино"},
+          "difficulty": 2,
+          "category": "incubator"
+        },
+        ...
+      ],
+      "total_questions": 6
+    }
+    ```
+
+### WebSocket события для квиза
+- `quiz_question` — новый вопрос
+- `quiz_answer_received` — кто-то ответил (реалтайм)
+- `quiz_results` — статистика по вопросу
+
+### Пример работы квиза (flow)
+1. Сервер отправляет событие `quiz_question` с вопросом и вариантами.
+2. Клиенты отправляют ответы через WebSocket (`quiz_answer`).
+3. Сервер в реальном времени рассылает событие `quiz_answer_received` для каждого ответа.
+4. По истечении времени — сервер отправляет событие `quiz_results` с правильным ответом и статистикой.
+5. После всех вопросов — переход к следующему этапу игры.
+
+--- 
