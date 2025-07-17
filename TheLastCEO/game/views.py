@@ -5,7 +5,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import login
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
-from .models import User, GameSession, Player
+from .models import User, GameSession, Player, QuizQuestion
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, UserProfileSerializer,
     GameSessionSerializer, PlayerSerializer, AvatarCustomizationSerializer
@@ -39,6 +39,7 @@ def login_view(request):
     serializer = UserLoginSerializer(data=request.data)
     if serializer.is_valid():
         user = serializer.validated_data['user']
+        login(request, user)
         refresh = RefreshToken.for_user(user)
         return Response({
             'refresh': str(refresh),
@@ -46,98 +47,56 @@ def login_view(request):
             'user_id': user.id,
             'nickname': user.nickname,
             'balance': user.balance
-        }, status=status.HTTP_200_OK)
+        })
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-@api_view(['GET'])
+@api_view(['GET', 'PUT'])
 @permission_classes([permissions.IsAuthenticated])
 def profile(request):
-    """Get user profile"""
-    serializer = UserProfileSerializer(request.user)
-    return Response(serializer.data)
-
-@api_view(['PUT'])
-@permission_classes([permissions.IsAuthenticated])
-def update_profile(request):
-    """Update user profile (non-avatar fields only)"""
-    # Only allow updating certain fields, not avatar-related fields
-    allowed_fields = {}
-    # Currently no updatable fields in the profile, but keeping the endpoint for future use
-    
-    serializer = UserProfileSerializer(request.user, data=allowed_fields, partial=True)
-    if serializer.is_valid():
-        serializer.save()
+    """User profile endpoint"""
+    if request.method == 'GET':
+        serializer = UserProfileSerializer(request.user)
         return Response(serializer.data)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    elif request.method == 'PUT':
+        serializer = UserProfileSerializer(request.user, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
-def generate_avatar(request):
-    """Generate a new avatar based on user's customization choices"""
+def customize_avatar(request):
+    """Customize user avatar"""
     serializer = AvatarCustomizationSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    user = request.user
-    headwear = serializer.validated_data['headwear']
-    accessory = serializer.validated_data['accessory']
-    gender = serializer.validated_data['gender']
-    favorite_color = serializer.validated_data['favorite_color']
-    
-    # Check if avatar generation is already in progress
-    if user.avatar_generation_in_progress:
-        return Response({
-            'error': 'Avatar generation already in progress. Please wait.'
-        }, status=status.HTTP_409_CONFLICT)
-    
-    try:
-        # Set generation in progress flag
-        user.avatar_generation_in_progress = True
-        user.avatar_headwear = headwear
-        user.avatar_accessory = accessory
-        user.avatar_gender = gender
-        user.avatar_favorite_color = favorite_color
+    if serializer.is_valid():
+        data = serializer.validated_data
+        
+        # Update user avatar preferences
+        user = request.user
+        user.avatar_headwear = data.get('headwear')
+        user.avatar_accessory = data.get('accessory')
+        user.avatar_gender = data.get('gender')
+        user.avatar_favorite_color = data.get('favorite_color')
         user.save()
         
-        # Generate and upload avatar
-        success, avatar_url = avatar_service.generate_and_upload_avatar(
-            user.id, headwear, accessory, gender, favorite_color
-        )
-        
-        if success and avatar_url:
-            # Update user with new avatar URL
+        # Generate new avatar
+        try:
+            avatar_url = avatar_service.generate_avatar_url(user)
             user.avatar_url = avatar_url
-            user.avatar_generation_in_progress = False
             user.save()
             
-            logger.info(f"Avatar generated successfully for user {user.id}")
             return Response({
-                'message': 'Avatar generated successfully',
-                'avatar_url': avatar_url,
-                'headwear': headwear,
-                'accessory': accessory,
-                'gender': gender,
-                'favorite_color': favorite_color
-            }, status=status.HTTP_201_CREATED)
-        else:
-            # Reset generation flag on failure
-            user.avatar_generation_in_progress = False
-            user.save()
-            
-            logger.error(f"Avatar generation failed for user {user.id}")
+                'message': 'Avatar customized successfully',
+                'avatar_url': avatar_url
+            })
+        except Exception as e:
+            logger.error(f"Error generating avatar: {str(e)}")
             return Response({
-                'error': 'Failed to generate avatar. Please try again later.'
+                'error': 'Failed to generate avatar'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
-    except Exception as e:
-        # Reset generation flag on exception
-        user.avatar_generation_in_progress = False
-        user.save()
-        
-        logger.error(f"Exception during avatar generation for user {user.id}: {str(e)}")
-        return Response({
-            'error': 'An error occurred during avatar generation. Please try again later.'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
@@ -206,17 +165,23 @@ def join_game(request, session_id):
     """Join a game session"""
     session = get_object_or_404(GameSession, session_id=session_id)
     
-    if session.status not in ['waiting', 'lobby']:
-        return Response({'error': 'Game already started'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    if session.players.count() >= session.max_players:
-        return Response({'error': 'Game is full'}, status=status.HTTP_400_BAD_REQUEST)
-    
+    # Check if user already joined
     if session.players.filter(user=request.user).exists():
-        return Response({'error': 'Already in this game'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Already joined this game'
+        }, status=status.HTTP_400_BAD_REQUEST)
     
+    # Check if game is full
+    if session.players.count() >= session.max_players:
+        return Response({
+            'error': 'Game is full'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Check if user has enough balance
     if request.user.balance < session.entry_fee:
-        return Response({'error': 'Insufficient balance'}, status=status.HTTP_402_PAYMENT_REQUIRED)
+        return Response({
+            'error': 'Insufficient balance'
+        }, status=status.HTTP_400_BAD_REQUEST)
     
     # Deduct entry fee
     request.user.balance -= session.entry_fee
@@ -239,41 +204,31 @@ def join_game(request, session_id):
     
     return Response({
         'message': 'Successfully joined game',
-        'player_number': player_number,
-        'session_id': session.session_id
-    }, status=status.HTTP_201_CREATED)
+        'player_number': player_number
+    })
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
-def game_statistics(request):
-    """Get user's game statistics"""
-    user_stats = {
-        'total_games': request.user.total_games_played,
-        'total_wins': request.user.total_games_won,
-        'win_rate': (request.user.total_games_won / request.user.total_games_played * 100) if request.user.total_games_played > 0 else 0,
-        'total_earnings': request.user.total_earnings,
-        'current_balance': request.user.balance
-    }
-    return Response(user_stats)
-
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
-def hall_of_fame(request):
-    """Get hall of fame - top players"""
-    top_players = User.objects.filter(
-        total_games_played__gt=0
-    ).order_by('-total_earnings')[:10]
+def quiz_questions(request):
+    """Get quiz questions for the game"""
+    questions = QuizQuestion.objects.filter(is_active=True).order_by('?')[:6]
     
-    hall_of_fame = []
-    for i, player in enumerate(top_players, 1):
-        hall_of_fame.append({
-            'rank': i,
-            'nickname': player.nickname,
-            'total_earnings': player.total_earnings,
-            'games_played': player.total_games_played,
-            'games_won': player.total_games_won,
-            'win_rate': (player.total_games_won / player.total_games_played * 100) if player.total_games_played > 0 else 0,
-            'avatar_url': player.avatar_url
+    questions_data = []
+    for question in questions:
+        questions_data.append({
+            'id': question.id,
+            'question_text': question.question_text,
+            'options': {
+                'A': question.option_a,
+                'B': question.option_b,
+                'C': question.option_c,
+                'D': question.option_d
+            },
+            'difficulty': question.difficulty,
+            'category': question.category
         })
     
-    return Response(hall_of_fame)
+    return Response({
+        'questions': questions_data,
+        'total_questions': len(questions_data)
+    })

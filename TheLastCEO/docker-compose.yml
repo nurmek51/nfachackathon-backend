@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  # Django Backend
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=True
+      - DJANGO_SETTINGS_MODULE=config.settings
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    depends_on:
+      - db
+      - redis
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             python manage.py runserver 0.0.0.0:8000"
+    restart: unless-stopped
+
+  # PostgreSQL Database
+  db:
+    image: postgres:13
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  # Redis for Channels
+  redis:
+    image: redis:6-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  # Celery Worker (if needed)
+  celery:
+    build: .
+    command: celery -A config worker -l info
+    environment:
+      - DEBUG=True
+      - DJANGO_SETTINGS_MODULE=config.settings
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_volume:
+  media_volume: 

@@ -76,7 +76,6 @@ class GameSession(models.Model):
         ('lobby', 'In Lobby'),
         ('quiz', 'Quiz Stage'),
         ('red_light', 'Red Light Green Light'),
-        ('honeycomb', 'Honeycomb Stage'),
         ('freedom_room', 'Freedom Room'),
         ('finished', 'Finished'),
     ]
@@ -150,33 +149,6 @@ class RedLightMovement(models.Model):
     is_during_red_light = models.BooleanField(default=False)
     eliminated = models.BooleanField(default=False)
 
-class HoneycombShape(models.Model):
-    """Honeycomb shapes for stage 3"""
-    SHAPE_CHOICES = [
-        ('circle', 'Circle'),
-        ('triangle', 'Triangle'),
-        ('square', 'Square'),
-        ('star', 'Star'),
-        ('heart', 'Heart'),
-    ]
-    
-    shape_type = models.CharField(max_length=20, choices=SHAPE_CHOICES)
-    svg_path = models.TextField()  # SVG path data
-    tolerance = models.FloatField(default=0.1)  # Drawing tolerance
-    time_limit = models.IntegerField(default=120)  # seconds
-    difficulty = models.IntegerField(default=1, validators=[MinValueValidator(1), MaxValueValidator(5)])
-
-class HoneycombAttempt(models.Model):
-    """Player attempts at honeycomb shapes"""
-    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name='honeycomb_attempts')
-    session = models.ForeignKey(GameSession, on_delete=models.CASCADE)
-    shape = models.ForeignKey(HoneycombShape, on_delete=models.CASCADE)
-    drawing_data = models.JSONField()  # Path coordinates
-    accuracy_score = models.FloatField()
-    success = models.BooleanField()
-    completed_at = models.DateTimeField(auto_now_add=True)
-    time_taken = models.FloatField()
-
 class ChatMessage(models.Model):
     """Chat messages in lobby and freedom room"""
     session = models.ForeignKey(GameSession, on_delete=models.CASCADE, related_name='chat_messages')
@@ -191,7 +163,6 @@ class GameStatistics(models.Model):
     total_players = models.IntegerField()
     quiz_eliminations = models.IntegerField(default=0)
     red_light_eliminations = models.IntegerField(default=0)
-    honeycomb_eliminations = models.IntegerField(default=0)
     winners_count = models.IntegerField(default=0)
     total_prize_distributed = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     average_survival_time = models.FloatField(default=0)

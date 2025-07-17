@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
-from .models import GameSession, Player, QuizQuestion, QuizAnswer, RedLightMovement, HoneycombShape, HoneycombAttempt, ChatMessage
+from .models import GameSession, Player, QuizQuestion, QuizAnswer, RedLightMovement, ChatMessage
 import random
 import math
 
@@ -44,8 +44,6 @@ class GameConsumer(AsyncWebsocketConsumer):
             await self.handle_quiz_answer(data)
         elif message_type == 'player_movement':
             await self.handle_player_movement(data)
-        elif message_type == 'honeycomb_drawing':
-            await self.handle_honeycomb_drawing(data)
         elif message_type == 'ready_check':
             await self.handle_ready_check(data)
     
@@ -55,24 +53,29 @@ class GameConsumer(AsyncWebsocketConsumer):
         if not player:
             return
         
-        message = await self.save_chat_message(player, data['message'])
+        message = data.get('message', '').strip()
+        if not message:
+            return
         
+        # Save chat message
+        await self.save_chat_message(player, message)
+        
+        # Broadcast to all players
         await self.channel_layer.group_send(
             self.room_group_name,
             {
                 'type': 'chat_message',
                 'message': {
-                    'id': message.id,
                     'player_number': player.player_number,
                     'nickname': player.user.nickname,
-                    'message': message.message,
-                    'timestamp': message.timestamp.isoformat()
+                    'message': message,
+                    'timestamp': timezone.now().isoformat()
                 }
             }
         )
     
     async def handle_quiz_answer(self, data):
-        """Handle quiz answers"""
+        """Handle quiz answer submission"""
         player = await self.get_player()
         if not player or not player.is_alive:
             return
@@ -85,11 +88,29 @@ class GameConsumer(AsyncWebsocketConsumer):
         answer = data['answer']
         time_taken = data.get('time_taken', 0)
         
+        # Check if player already answered this question
+        already_answered = await self.check_if_already_answered(player, question_id)
+        if already_answered:
+            return
+        
         # Save answer and check if correct
         is_correct = await self.save_quiz_answer(player, question_id, answer, time_taken)
         
-        # Check if quiz stage is complete
-        await self.check_quiz_completion()
+        # Broadcast answer received (for real-time feedback)
+        await self.channel_layer.group_send(
+            self.room_group_name,
+            {
+                'type': 'quiz_answer_received',
+                'answer_data': {
+                    'player_number': player.player_number,
+                    'nickname': player.user.nickname,
+                    'question_id': question_id,
+                    'answer': answer,
+                    'is_correct': is_correct,
+                    'time_taken': time_taken
+                }
+            }
+        )
     
     async def handle_player_movement(self, data):
         """Handle player movement in Red Light Green Light"""
@@ -124,29 +145,6 @@ class GameConsumer(AsyncWebsocketConsumer):
                     'y': new_y
                 }
             )
-    
-    async def handle_honeycomb_drawing(self, data):
-        """Handle honeycomb shape drawing"""
-        player = await self.get_player()
-        if not player or not player.is_alive:
-            return
-        
-        session = await self.get_session()
-        if session.status != 'honeycomb':
-            return
-        
-        shape_id = data['shape_id']
-        drawing_data = data['drawing_data']
-        time_taken = data.get('time_taken', 0)
-        
-        # Validate drawing and save attempt
-        success = await self.validate_honeycomb_drawing(player, shape_id, drawing_data, time_taken)
-        
-        if not success:
-            await self.eliminate_player(player, 'honeycomb')
-        
-        # Check if honeycomb stage is complete
-        await self.check_honeycomb_completion()
     
     async def handle_ready_check(self, data):
         """Handle player ready status"""
@@ -192,16 +190,22 @@ class GameConsumer(AsyncWebsocketConsumer):
             'data': event['question']
         }))
     
+    async def quiz_answer_received(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'quiz_answer_received',
+            'data': event['answer_data']
+        }))
+    
+    async def quiz_results(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'quiz_results',
+            'data': event['results']
+        }))
+    
     async def red_light_signal(self, event):
         await self.send(text_data=json.dumps({
             'type': 'red_light_signal',
             'data': event['signal']
-        }))
-    
-    async def honeycomb_shape(self, event):
-        await self.send(text_data=json.dumps({
-            'type': 'honeycomb_shape',
-            'data': event['shape']
         }))
     
     async def player_movement(self, event):
@@ -244,6 +248,13 @@ class GameConsumer(AsyncWebsocketConsumer):
         )
     
     @database_sync_to_async
+    def check_if_already_answered(self, player, question_id):
+        return QuizAnswer.objects.filter(
+            player=player,
+            question_id=question_id
+        ).exists()
+    
+    @database_sync_to_async
     def save_quiz_answer(self, player, question_id, answer, time_taken):
         question = QuizQuestion.objects.get(id=question_id)
         is_correct = question.correct_answer == answer
@@ -265,8 +276,7 @@ class GameConsumer(AsyncWebsocketConsumer):
         player.eliminated_at = timezone.now()
         player.elimination_stage = {
             'quiz': 1,
-            'red_light': 2,
-            'honeycomb': 3
+            'red_light': 2
         }[stage]
         player.save()
         
@@ -289,32 +299,6 @@ class GameConsumer(AsyncWebsocketConsumer):
         player.position_x = x
         player.position_y = y
         player.save()
-    
-    @database_sync_to_async
-    def validate_honeycomb_drawing(self, player, shape_id, drawing_data, time_taken):
-        shape = HoneycombShape.objects.get(id=shape_id)
-        
-        # Calculate accuracy score (simplified - you'd implement actual path comparison)
-        accuracy_score = self.calculate_drawing_accuracy(drawing_data, shape.svg_path)
-        success = accuracy_score >= (1 - shape.tolerance)
-        
-        HoneycombAttempt.objects.create(
-            player=player,
-            session=player.session,
-            shape=shape,
-            drawing_data=drawing_data,
-            accuracy_score=accuracy_score,
-            success=success,
-            time_taken=time_taken
-        )
-        
-        return success
-    
-    def calculate_drawing_accuracy(self, drawing_data, target_path):
-        """Calculate drawing accuracy (simplified implementation)"""
-        # This would implement actual path comparison algorithm
-        # For now, return a random score for demonstration
-        return random.uniform(0.6, 1.0)
     
     @database_sync_to_async
     def get_alive_count(self):
@@ -359,8 +343,7 @@ class GameConsumer(AsyncWebsocketConsumer):
             players.append({
                 'player_number': player.player_number,
                 'nickname': player.user.nickname,
-                'avatar_color': player.user.avatar_color,
-                'avatar_pattern': player.user.avatar_pattern,
+                'avatar_color': player.user.avatar_favorite_color,
                 'is_alive': player.is_alive,
                 'position_x': player.position_x,
                 'position_y': player.position_y
@@ -376,22 +359,23 @@ class GameConsumer(AsyncWebsocketConsumer):
         elif session.status == 'quiz':
             await self.start_red_light_stage()
         elif session.status == 'red_light':
-            await self.start_honeycomb_stage()
-        elif session.status == 'honeycomb':
             await self.start_freedom_room()
     
     async def start_quiz_stage(self):
-        """Start quiz stage"""
+        """Start quiz stage with real-time answers like Kahoot"""
         await self.update_session_status('quiz')
         questions = await self.get_quiz_questions()
         
-        for question in questions:
+        for i, question in enumerate(questions):
+            # Send question to all players
             await self.channel_layer.group_send(
                 self.room_group_name,
                 {
                     'type': 'quiz_question',
                     'question': {
                         'id': question.id,
+                        'question_number': i + 1,
+                        'total_questions': len(questions),
                         'question': question.question_text,
                         'options': {
                             'A': question.option_a,
@@ -404,11 +388,107 @@ class GameConsumer(AsyncWebsocketConsumer):
                 }
             )
             
-            # Wait for answers
-            await asyncio.sleep(30)
+            # Wait for answers with real-time tracking
+            await self.wait_for_quiz_answers(question.id, 30)
+            
+            # Show results for this question
+            await self.show_question_results(question.id)
+            
+            # Wait a bit before next question
+            await asyncio.sleep(3)
         
-        # Process quiz results
+        # Process final quiz results and eliminate players
         await self.process_quiz_results()
+    
+    async def wait_for_quiz_answers(self, question_id, time_limit):
+        """Wait for answers with real-time tracking"""
+        start_time = timezone.now()
+        answered_players = set()
+        
+        while (timezone.now() - start_time).total_seconds() < time_limit:
+            # Check for new answers
+            new_answers = await self.get_new_answers(question_id, answered_players)
+            
+            for answer in new_answers:
+                answered_players.add(answer['player_number'])
+                # Broadcast answer received
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'quiz_answer_received',
+                        'answer_data': answer
+                    }
+                )
+            
+            await asyncio.sleep(0.5)  # Check every 500ms
+    
+    @database_sync_to_async
+    def get_new_answers(self, question_id, answered_players):
+        """Get new answers for a question"""
+        answers = QuizAnswer.objects.filter(
+            question_id=question_id,
+            session__session_id=self.session_id
+        ).select_related('player__user')
+        
+        new_answers = []
+        for answer in answers:
+            if answer.player.player_number not in answered_players:
+                new_answers.append({
+                    'player_number': answer.player.player_number,
+                    'nickname': answer.player.user.nickname,
+                    'question_id': question_id,
+                    'answer': answer.answer,
+                    'is_correct': answer.is_correct,
+                    'time_taken': answer.time_taken
+                })
+        
+        return new_answers
+    
+    async def show_question_results(self, question_id):
+        """Show results for a specific question"""
+        results = await self.get_question_results(question_id)
+        
+        await self.channel_layer.group_send(
+            self.room_group_name,
+            {
+                'type': 'quiz_results',
+                'results': {
+                    'question_id': question_id,
+                    'correct_answer': results['correct_answer'],
+                    'answer_stats': results['answer_stats'],
+                    'player_results': results['player_results']
+                }
+            }
+        )
+    
+    @database_sync_to_async
+    def get_question_results(self, question_id):
+        """Get results for a specific question"""
+        question = QuizQuestion.objects.get(id=question_id)
+        answers = QuizAnswer.objects.filter(
+            question_id=question_id,
+            session__session_id=self.session_id
+        ).select_related('player__user')
+        
+        # Count answers for each option
+        answer_stats = {'A': 0, 'B': 0, 'C': 0, 'D': 0}
+        player_results = []
+        
+        for answer in answers:
+            answer_stats[answer.answer] += 1
+            player_results.append({
+                'player_number': answer.player.player_number,
+                'nickname': answer.player.user.nickname,
+                'answer': answer.answer,
+                'is_correct': answer.is_correct,
+                'time_taken': answer.time_taken
+            })
+        
+        return {
+            'correct_answer': question.correct_answer,
+            'answer_stats': answer_stats,
+            'player_results': player_results
+        }
     
     async def start_red_light_stage(self):
         """Start Red Light Green Light stage"""
@@ -430,13 +510,6 @@ class GameConsumer(AsyncWebsocketConsumer):
         # Run red light green light sequence
         await self.run_red_light_sequence()
     
-    async def start_honeycomb_stage(self):
-        """Start Honeycomb stage"""
-        await self.update_session_status('honeycomb')
-        
-        # Assign shapes to players
-        await self.assign_honeycomb_shapes()
-    
     async def start_freedom_room(self):
         """Start Freedom Room - distribute prizes"""
         await self.update_session_status('freedom_room')
@@ -453,7 +526,7 @@ class GameConsumer(AsyncWebsocketConsumer):
     
     @database_sync_to_async
     def get_quiz_questions(self):
-        return list(QuizQuestion.objects.filter(is_active=True).order_by('?')[:10])
+        return list(QuizQuestion.objects.filter(is_active=True).order_by('?')[:6])
     
     async def process_quiz_results(self):
         """Process quiz results and eliminate players"""
@@ -461,16 +534,58 @@ class GameConsumer(AsyncWebsocketConsumer):
         session = await self.get_session()
         players = await self.get_alive_players()
         
-        # Calculate scores and eliminate bottom 30%
+        # Calculate scores based on correct answers and speed
+        player_scores = await self.calculate_player_scores()
+        
+        # Sort players by score and eliminate bottom 30%
         elimination_count = max(1, len(players) * 30 // 100)
         
-        # This would implement actual scoring logic
-        # For now, randomly eliminate players
-        for _ in range(elimination_count):
-            if players:
-                player = random.choice(players)
-                await self.eliminate_player(player, 'quiz')
-                players.remove(player)
+        # Eliminate players with lowest scores
+        for i in range(elimination_count):
+            if player_scores:
+                worst_player = min(player_scores, key=lambda x: x['score'])
+                player = await self.get_player_by_number(worst_player['player_number'])
+                if player:
+                    await self.eliminate_player(player, 'quiz')
+                player_scores.remove(worst_player)
+    
+    @database_sync_to_async
+    def calculate_player_scores(self):
+        """Calculate scores for all players based on quiz performance"""
+        session = GameSession.objects.get(session_id=self.session_id)
+        players = session.get_alive_players()
+        
+        player_scores = []
+        for player in players:
+            answers = QuizAnswer.objects.filter(
+                player=player,
+                session=session
+            )
+            
+            correct_answers = answers.filter(is_correct=True).count()
+            total_time = sum(answer.time_taken for answer in answers if answer.is_correct)
+            
+            # Score based on correct answers and speed (lower time = higher score)
+            score = correct_answers * 100 - total_time
+            player_scores.append({
+                'player_number': player.player_number,
+                'score': score,
+                'correct_answers': correct_answers,
+                'total_time': total_time
+            })
+        
+        return player_scores
+    
+    @database_sync_to_async
+    def get_player_by_number(self, player_number):
+        """Get player by player number"""
+        try:
+            return Player.objects.get(
+                session__session_id=self.session_id,
+                player_number=player_number
+            )
+        except Player.DoesNotExist:
+            return None
     
     async def run_red_light_sequence(self):
         """Run the red light green light sequence"""
@@ -512,30 +627,6 @@ class GameConsumer(AsyncWebsocketConsumer):
         
         # Eliminate players who didn't reach the end
         await self.eliminate_slow_players()
-    
-    @database_sync_to_async
-    def assign_honeycomb_shapes(self):
-        """Assign honeycomb shapes to remaining players"""
-        session = GameSession.objects.get(session_id=self.session_id)
-        alive_players = session.get_alive_players()
-        shapes = list(HoneycombShape.objects.all())
-        
-        for player in alive_players:
-            shape = random.choice(shapes)
-            # Send shape assignment
-            asyncio.create_task(self.channel_layer.group_send(
-                self.room_group_name,
-                {
-                    'type': 'honeycomb_shape',
-                    'shape': {
-                        'player_number': player.player_number,
-                        'shape_id': shape.id,
-                        'shape_type': shape.shape_type,
-                        'svg_path': shape.svg_path,
-                        'time_limit': shape.time_limit
-                    }
-                }
-            ))
     
     @database_sync_to_async
     def distribute_prizes(self):
@@ -603,11 +694,5 @@ class GameConsumer(AsyncWebsocketConsumer):
     async def check_quiz_completion(self):
         """Check if quiz stage is complete"""
         # This would check if all players have answered
-        # For demo, we'll assume it's complete after a delay
-        pass
-    
-    async def check_honeycomb_completion(self):
-        """Check if honeycomb stage is complete"""
-        # This would check if all players have completed their shapes
         # For demo, we'll assume it's complete after a delay
         pass 
