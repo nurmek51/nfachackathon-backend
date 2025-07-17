@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from .models import User, GameSession, Player, ChatMessage, Purchase
+from .models import User, GameSession, Player, ChatMessage
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
@@ -34,10 +34,39 @@ class UserLoginSerializer(serializers.Serializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'nickname', 'balance', 'avatar_color', 'avatar_pattern', 
+        fields = ['id', 'nickname', 'balance', 'avatar_url', 'avatar_headwear', 'avatar_accessory',
+                 'avatar_gender', 'avatar_favorite_color', 'avatar_generation_in_progress', 
                  'total_games_played', 'total_games_won', 'total_earnings', 'created_at']
         read_only_fields = ['id', 'nickname', 'total_games_played', 'total_games_won', 
-                           'total_earnings', 'created_at']
+                           'total_earnings', 'created_at', 'avatar_url', 'avatar_generation_in_progress']
+
+class AvatarCustomizationSerializer(serializers.Serializer):
+    headwear = serializers.ChoiceField(choices=[
+        ('bandana', 'Bandana'),
+        ('crown', 'Crown'),
+        ('cap', 'Cap'),
+    ])
+    accessory = serializers.ChoiceField(choices=[
+        ('scarf', 'Scarf'),
+        ('earrings', 'Earrings'),
+        ('glasses', 'Glasses'),
+    ])
+    gender = serializers.ChoiceField(choices=[
+        ('male', 'Male'),
+        ('female', 'Female'),
+    ])
+    favorite_color = serializers.ChoiceField(choices=[
+        ('red', 'Red'),
+        ('blue', 'Blue'),
+        ('green', 'Green'),
+        ('yellow', 'Yellow'),
+        ('purple', 'Purple'),
+        ('orange', 'Orange'),
+        ('pink', 'Pink'),
+        ('black', 'Black'),
+        ('white', 'White'),
+        ('brown', 'Brown'),
+    ])
 
 class GameSessionSerializer(serializers.ModelSerializer):
     alive_players_count = serializers.SerializerMethodField()
@@ -52,12 +81,11 @@ class GameSessionSerializer(serializers.ModelSerializer):
 
 class PlayerSerializer(serializers.ModelSerializer):
     nickname = serializers.CharField(source='user.nickname', read_only=True)
-    avatar_color = serializers.CharField(source='user.avatar_color', read_only=True)
-    avatar_pattern = serializers.CharField(source='user.avatar_pattern', read_only=True)
+    avatar_url = serializers.URLField(source='user.avatar_url', read_only=True)
     
     class Meta:
         model = Player
-        fields = ['player_number', 'nickname', 'avatar_color', 'avatar_pattern', 
+        fields = ['player_number', 'nickname', 'avatar_url', 
                  'is_alive', 'position_x', 'position_y', 'joined_at']
 
 class ChatMessageSerializer(serializers.ModelSerializer):
@@ -66,26 +94,4 @@ class ChatMessageSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = ChatMessage
-        fields = ['id', 'message', 'nickname', 'player_number', 'timestamp', 'is_system_message']
-
-class PurchaseSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Purchase
-        fields = ['item_type', 'item_value', 'cost']
-        
-    def create(self, validated_data):
-        user = self.context['request'].user
-        if user.balance < validated_data['cost']:
-            raise serializers.ValidationError("Insufficient balance")
-        
-        purchase = Purchase.objects.create(user=user, **validated_data)
-        user.balance -= validated_data['cost']
-        
-        # Apply the purchase
-        if validated_data['item_type'] == 'color':
-            user.avatar_color = validated_data['item_value']
-        elif validated_data['item_type'] == 'pattern':
-            user.avatar_pattern = validated_data['item_value']
-        
-        user.save()
-        return purchase 
+        fields = ['id', 'message', 'nickname', 'player_number', 'timestamp', 'is_system_message'] 

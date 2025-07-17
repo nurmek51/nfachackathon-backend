@@ -1,15 +1,19 @@
 from rest_framework import status, generics, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.authtoken.models import Token
+from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import login
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
-from .models import User, GameSession, Player, Purchase
+from .models import User, GameSession, Player
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, UserProfileSerializer,
-    GameSessionSerializer, PlayerSerializer, PurchaseSerializer
+    GameSessionSerializer, PlayerSerializer, AvatarCustomizationSerializer
 )
+from .avatar_service import avatar_service
+import logging
+
+logger = logging.getLogger(__name__)
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
@@ -18,9 +22,10 @@ def register(request):
     serializer = UserRegistrationSerializer(data=request.data)
     if serializer.is_valid():
         user = serializer.save()
-        token, created = Token.objects.get_or_create(user=user)
+        refresh = RefreshToken.for_user(user)
         return Response({
-            'token': token.key,
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
             'user_id': user.id,
             'nickname': user.nickname,
             'balance': user.balance
@@ -34,9 +39,10 @@ def login_view(request):
     serializer = UserLoginSerializer(data=request.data)
     if serializer.is_valid():
         user = serializer.validated_data['user']
-        token, created = Token.objects.get_or_create(user=user)
+        refresh = RefreshToken.for_user(user)
         return Response({
-            'token': token.key,
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
             'user_id': user.id,
             'nickname': user.nickname,
             'balance': user.balance
@@ -53,12 +59,119 @@ def profile(request):
 @api_view(['PUT'])
 @permission_classes([permissions.IsAuthenticated])
 def update_profile(request):
-    """Update user profile (avatar customization)"""
-    serializer = UserProfileSerializer(request.user, data=request.data, partial=True)
+    """Update user profile (non-avatar fields only)"""
+    # Only allow updating certain fields, not avatar-related fields
+    allowed_fields = {}
+    # Currently no updatable fields in the profile, but keeping the endpoint for future use
+    
+    serializer = UserProfileSerializer(request.user, data=allowed_fields, partial=True)
     if serializer.is_valid():
         serializer.save()
         return Response(serializer.data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def generate_avatar(request):
+    """Generate a new avatar based on user's customization choices"""
+    serializer = AvatarCustomizationSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    user = request.user
+    headwear = serializer.validated_data['headwear']
+    accessory = serializer.validated_data['accessory']
+    gender = serializer.validated_data['gender']
+    favorite_color = serializer.validated_data['favorite_color']
+    
+    # Check if avatar generation is already in progress
+    if user.avatar_generation_in_progress:
+        return Response({
+            'error': 'Avatar generation already in progress. Please wait.'
+        }, status=status.HTTP_409_CONFLICT)
+    
+    try:
+        # Set generation in progress flag
+        user.avatar_generation_in_progress = True
+        user.avatar_headwear = headwear
+        user.avatar_accessory = accessory
+        user.avatar_gender = gender
+        user.avatar_favorite_color = favorite_color
+        user.save()
+        
+        # Generate and upload avatar
+        success, avatar_url = avatar_service.generate_and_upload_avatar(
+            user.id, headwear, accessory, gender, favorite_color
+        )
+        
+        if success and avatar_url:
+            # Update user with new avatar URL
+            user.avatar_url = avatar_url
+            user.avatar_generation_in_progress = False
+            user.save()
+            
+            logger.info(f"Avatar generated successfully for user {user.id}")
+            return Response({
+                'message': 'Avatar generated successfully',
+                'avatar_url': avatar_url,
+                'headwear': headwear,
+                'accessory': accessory,
+                'gender': gender,
+                'favorite_color': favorite_color
+            }, status=status.HTTP_201_CREATED)
+        else:
+            # Reset generation flag on failure
+            user.avatar_generation_in_progress = False
+            user.save()
+            
+            logger.error(f"Avatar generation failed for user {user.id}")
+            return Response({
+                'error': 'Failed to generate avatar. Please try again later.'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+    except Exception as e:
+        # Reset generation flag on exception
+        user.avatar_generation_in_progress = False
+        user.save()
+        
+        logger.error(f"Exception during avatar generation for user {user.id}: {str(e)}")
+        return Response({
+            'error': 'An error occurred during avatar generation. Please try again later.'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def avatar_options(request):
+    """Get available avatar customization options"""
+    options = {
+        'headwear': [
+            {'value': 'bandana', 'name': 'Bandana'},
+            {'value': 'crown', 'name': 'Crown'},
+            {'value': 'cap', 'name': 'Cap'},
+        ],
+        'accessories': [
+            {'value': 'scarf', 'name': 'Scarf'},
+            {'value': 'earrings', 'name': 'Earrings'},
+            {'value': 'glasses', 'name': 'Glasses'},
+        ],
+        'gender': [
+            {'value': 'male', 'name': 'Male'},
+            {'value': 'female', 'name': 'Female'},
+        ],
+        'favorite_color': [
+            {'value': 'red', 'name': 'Red'},
+            {'value': 'blue', 'name': 'Blue'},
+            {'value': 'green', 'name': 'Green'},
+            {'value': 'yellow', 'name': 'Yellow'},
+            {'value': 'purple', 'name': 'Purple'},
+            {'value': 'orange', 'name': 'Orange'},
+            {'value': 'pink', 'name': 'Pink'},
+            {'value': 'black', 'name': 'Black'},
+            {'value': 'white', 'name': 'White'},
+            {'value': 'brown', 'name': 'Brown'},
+        ]
+    }
+    return Response(options)
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
@@ -71,6 +184,21 @@ def available_games(request):
     )
     serializer = GameSessionSerializer(sessions, many=True)
     return Response(serializer.data)
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def create_game(request):
+    """Create a new game session"""
+    # Accept optional settings from request.data
+    max_players = request.data.get('max_players', 80)
+    entry_fee = request.data.get('entry_fee', 200000)
+    # Additional settings can be added as needed
+    session = GameSession.objects.create(
+        max_players=max_players,
+        entry_fee=entry_fee
+    )
+    serializer = GameSessionSerializer(session)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
@@ -144,43 +272,8 @@ def hall_of_fame(request):
             'total_earnings': player.total_earnings,
             'games_played': player.total_games_played,
             'games_won': player.total_games_won,
-            'win_rate': (player.total_games_won / player.total_games_played * 100) if player.total_games_played > 0 else 0
+            'win_rate': (player.total_games_won / player.total_games_played * 100) if player.total_games_played > 0 else 0,
+            'avatar_url': player.avatar_url
         })
     
     return Response(hall_of_fame)
-
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
-def available_items(request):
-    """Get available items for purchase"""
-    items = {
-        'colors': [
-            {'value': '#FF6B6B', 'name': 'Red', 'cost': 10000},
-            {'value': '#4ECDC4', 'name': 'Teal', 'cost': 10000},
-            {'value': '#45B7D1', 'name': 'Blue', 'cost': 10000},
-            {'value': '#96CEB4', 'name': 'Green', 'cost': 10000},
-            {'value': '#FFEAA7', 'name': 'Yellow', 'cost': 10000},
-            {'value': '#DDA0DD', 'name': 'Purple', 'cost': 15000},
-            {'value': '#FFD700', 'name': 'Gold', 'cost': 25000},
-            {'value': '#FF1493', 'name': 'Pink', 'cost': 15000},
-        ],
-        'patterns': [
-            {'value': 'solid', 'name': 'Solid', 'cost': 0},
-            {'value': 'stripes', 'name': 'Stripes', 'cost': 5000},
-            {'value': 'dots', 'name': 'Dots', 'cost': 5000},
-            {'value': 'gradient', 'name': 'Gradient', 'cost': 8000},
-            {'value': 'diamond', 'name': 'Diamond', 'cost': 12000},
-            {'value': 'stars', 'name': 'Stars', 'cost': 15000},
-        ]
-    }
-    return Response(items)
-
-@api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated])
-def purchase_item(request):
-    """Purchase avatar customization item"""
-    serializer = PurchaseSerializer(data=request.data, context={'request': request})
-    if serializer.is_valid():
-        serializer.save()
-        return Response({'message': 'Item purchased successfully'}, status=status.HTTP_201_CREATED)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

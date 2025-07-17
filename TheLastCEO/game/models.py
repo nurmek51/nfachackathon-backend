@@ -1,24 +1,73 @@
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager
 from django.utils import timezone
 from django.core.validators import MinValueValidator, MaxValueValidator
 import uuid
 import json
 
+class CustomUserManager(UserManager):
+    def create_user(self, nickname, email=None, password=None, **extra_fields):
+        if not nickname:
+            raise ValueError('The Nickname must be set')
+        email = self.normalize_email(email)
+        user = self.model(nickname=nickname, email=email, **extra_fields)
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, nickname, email=None, password=None, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        extra_fields.setdefault('is_active', True)
+
+        if extra_fields.get('is_staff') is not True:
+            raise ValueError('Superuser must have is_staff=True.')
+        if extra_fields.get('is_superuser') is not True:
+            raise ValueError('Superuser must have is_superuser=True.')
+
+        return self.create_user(nickname, email, password, **extra_fields)
+
 class User(AbstractUser):
-    """Custom user model with nickname and balance"""
+    username = None  # Remove the username field
     nickname = models.CharField(max_length=30, unique=True)
-    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    avatar_color = models.CharField(max_length=7, default='#FF6B6B')  # Hex color
-    avatar_pattern = models.CharField(max_length=20, default='solid')
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=200000)
+    avatar_url = models.URLField(max_length=500, null=True, blank=True)
+    avatar_headwear = models.CharField(max_length=20, choices=[
+        ('bandana', 'Bandana'),
+        ('crown', 'Crown'),
+        ('cap', 'Cap'),
+    ], null=True, blank=True)
+    avatar_accessory = models.CharField(max_length=20, choices=[
+        ('scarf', 'Scarf'),
+        ('earrings', 'Earrings'),
+        ('glasses', 'Glasses'),
+    ], null=True, blank=True)
+    avatar_gender = models.CharField(max_length=10, choices=[
+        ('male', 'Male'),
+        ('female', 'Female'),
+    ], null=True, blank=True)
+    avatar_favorite_color = models.CharField(max_length=20, choices=[
+        ('red', 'Red'),
+        ('blue', 'Blue'),
+        ('green', 'Green'),
+        ('yellow', 'Yellow'),
+        ('purple', 'Purple'),
+        ('orange', 'Orange'),
+        ('pink', 'Pink'),
+        ('black', 'Black'),
+        ('white', 'White'),
+        ('brown', 'Brown'),
+    ], null=True, blank=True)
+    avatar_generation_in_progress = models.BooleanField(default=False)
     total_games_played = models.IntegerField(default=0)
     total_games_won = models.IntegerField(default=0)
     total_earnings = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     last_active = models.DateTimeField(auto_now=True)
-    
+
     USERNAME_FIELD = 'nickname'
     REQUIRED_FIELDS = ['email']
+    objects = CustomUserManager()
 
 class GameSession(models.Model):
     """Main game session model"""
@@ -147,16 +196,3 @@ class GameStatistics(models.Model):
     total_prize_distributed = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     average_survival_time = models.FloatField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
-
-class Purchase(models.Model):
-    """Avatar customization purchases"""
-    ITEM_TYPES = [
-        ('color', 'Avatar Color'),
-        ('pattern', 'Avatar Pattern'),
-    ]
-    
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='purchases')
-    item_type = models.CharField(max_length=20, choices=ITEM_TYPES)
-    item_value = models.CharField(max_length=50)  # color code or pattern name
-    cost = models.DecimalField(max_digits=12, decimal_places=2)
-    purchased_at = models.DateTimeField(auto_now_add=True)

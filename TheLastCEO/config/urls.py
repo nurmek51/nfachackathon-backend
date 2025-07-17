@@ -17,17 +17,24 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from game import views
+from rest_framework_simplejwt.views import (
+    TokenObtainPairView,
+    TokenRefreshView,
+)
 api_urlpatterns = [
     path('auth/register/', views.register, name='register'),
     path('auth/login/', views.login_view, name='login'),
+    path('auth/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('profile/', views.profile, name='profile'),
     path('profile/update/', views.update_profile, name='update_profile'),
     path('games/available/', views.available_games, name='available_games'),
-    path('games/&lt;uuid:session_id&gt;/join/', views.join_game, name='join_game'),
+    path('games/create/', views.create_game, name='create_game'),
+    path('games/<uuid:session_id>/join/', views.join_game, name='join_game'),
     path('stats/', views.game_statistics, name='game_statistics'),
     path('hall-of-fame/', views.hall_of_fame, name='hall_of_fame'),
-    path('shop/items/', views.available_items, name='available_items'),
-    path('shop/purchase/', views.purchase_item, name='purchase_item'),
+    path('avatar/options/', views.avatar_options, name='avatar_options'),
+    path('avatar/generate/', views.generate_avatar, name='generate_avatar'),
 ]
 urlpatterns = [
     path('admin/', admin.site.urls),

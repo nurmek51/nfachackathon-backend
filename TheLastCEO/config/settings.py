@@ -127,13 +127,24 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20
+}
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'AUTH_HEADER_TYPES': ('Bearer',),
 }
 CHANNEL_LAYERS = {
     'default': {
@@ -148,3 +159,13 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
+
+# Google Cloud Configuration
+import os
+GOOGLE_CLOUD_PROJECT_ID = 'manifest-stream-462605-q8'
+GOOGLE_CLOUD_BUCKET_NAME = 'nfachahaton'
+GOOGLE_APPLICATION_CREDENTIALS = os.path.join(BASE_DIR.parent, 'key.json')
+
+# Avatar generation settings
+AVATAR_GENERATION_ENABLED = True
+AVATAR_CACHE_TIMEOUT = 3600  # 1 hour in seconds
