@@ -80,7 +80,7 @@ ASGI_APPLICATION = 'config.asgi.application'
 DATABASE_URL = os.getenv('DATABASE_URL')
 if DATABASE_URL:
     DATABASES = {
-        'default': dj_database_url.parse(DATABASE_URL)
+        'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
     }
 else:
     DATABASES = {
@@ -90,7 +90,11 @@ else:
             'USER': os.getenv('DB_USER', 'postgres'),
             'PASSWORD': os.getenv('DB_PASSWORD', '123123123qwe!'),
             'HOST': os.getenv('DB_HOST', 'db.hpovgribnyikmxgbxtww.supabase.co'),
-            'PORT': os.getenv('DB_PORT', '5432')
+            'PORT': os.getenv('DB_PORT', '5432'),
+            'OPTIONS': {
+                'connect_timeout': 10,
+                'sslmode': 'require',
+            },
         }
     }
 

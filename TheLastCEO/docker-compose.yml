@@ -1,69 +1,78 @@
-version: '3.8'
+# Docker Compose production configuration for TheLastCEO
 
 services:
-  # Django Backend
-  backend:
-    build: .
-    ports:
-      - "8000:8000"
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    expose:
+      - "8000"
     env_file:
       - .env
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=redis://redis:${REDIS_PORT}/0
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - REDIS_URL=${REDIS_URL}
     volumes:
-      - .:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/media
     depends_on:
+      - db
       - redis
-    command: >
-      sh -c "python manage.py migrate &&
-             python manage.py collectstatic --noinput &&
-             python manage.py runserver 0.0.0.0:8000"
-    restart: unless-stopped
+    networks:
+      - app-network
 
-  # Redis for Channels
-  redis:
-    image: redis:6-alpine
-    ports:
-      - "${REDIS_PORT}:6379"
+  db:
+    image: postgres:13
+    restart: always
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
-      - redis_data:/data
-    restart: unless-stopped
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
 
-  # Nginx Reverse Proxy
   nginx:
-    image: nginx:alpine
+    image: nginx:latest
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
       - static_volume:/app/staticfiles
       - media_volume:/app/media
     depends_on:
-      - backend
-    restart: unless-stopped
+      - web
+    networks:
+      - app-network
 
-  # Celery Worker (if needed)
-  celery:
-    build: .
-    command: celery -A config worker -l info
-    env_file:
-      - .env
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=redis://redis:${REDIS_PORT}/0
+  certbot:
+    image: certbot/certbot
     volumes:
-      - .:/app
-    depends_on:
-      - redis
-    restart: unless-stopped
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
+    networks:
+      - app-network
+
+  redis:
+    image: redis:6-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
-  redis_data:
   static_volume:
-  media_volume: 
+  media_volume:
+  redis_data:
+  postgres_data: 

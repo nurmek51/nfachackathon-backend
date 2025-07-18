@@ -20,7 +20,7 @@ RUN apt-get update \
         libfreetype6-dev \
         liblcms2-dev \
         libopenjp2-7-dev \
-        libtiff5-dev \
+        libtiff6-dev \
         libwebp-dev \
         libharfbuzz-dev \
         libfribidi-dev \
@@ -31,9 +31,6 @@ RUN apt-get update \
 # Copy requirements first for better caching
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
-
-# Copy Google Cloud credentials (if they exist)
-COPY key.json /app/key.json
 
 # Copy project
 COPY . /app/
@@ -46,9 +43,9 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python manage.py check || exit 1
+# Health check with retry logic
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
+    CMD python health_check.py || exit 1
 
-# Run migrations and start server
-CMD ["sh", "-c", "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"] 
+# Run migrations, collect static files and start server
+CMD ["sh", "-c", "python manage.py migrate && python manage.py collectstatic --noinput && python manage.py runserver 0.0.0.0:8000"] 
